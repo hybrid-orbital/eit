@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.envrc.local
+.direnv/
+test-results/
