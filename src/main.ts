@@ -1,5 +1,16 @@
+import {
+  algorithmLabels,
+  algorithmDescriptions,
+  type Algorithm,
+} from "./reconstruction";
 import "./style.css";
-import { defaults, validate, type Config, type Result } from "./solver";
+import {
+  defaults,
+  validate,
+  importExperiment,
+  type Config,
+  type Result,
+} from "./solver";
 let config: Config = structuredClone(defaults),
   result: Result | undefined,
   shown: Config = structuredClone(config),
@@ -32,20 +43,40 @@ $("#app").innerHTML = `
 <div class="workspace"><aside><div class="side-head"><span class="eyebrow">EXPERIMENT SETUP</span><h2>定义你的实验<span>01</span></h2></div><div id="controls"></div><div class="aside-footer"><button id="reset" class="quiet">↺ 恢复默认实验</button><span>二维 · 准静态 · 差分成像</span></div></aside>
 <main><div class="intro"><div><div class="eyebrow">THE INVISIBLE, MADE VISIBLE</div><h1>从边界电压，看见内部。</h1><p>构建介质，注入电流，探索电阻抗成像的物理与逆问题。</p></div><div class="run-state"><span id="status-dot" class="local-dot"></span><span id="status" role="status">初始化求解器</span><small id="compute-time">Web Worker / FEM</small></div></div>
 <div id="error" role="alert" hidden></div>
-<div class="toolbar"><div class="toolbar-left"><span class="live-tag">LIVE EXPERIMENT</span><span id="summary"></span></div><div><button id="mesh-toggle" aria-pressed="false" class="quiet">△ 网格</button><button id="play" class="primary">▶ 播放扫描</button></div></div>
+<div class="toolbar"><div class="toolbar-left"><span class="live-tag">LIVE EXPERIMENT</span><span id="summary"></span></div><div><select id="quick-algorithm" aria-label="快速切换重建算法">${Object.entries(
+  algorithmLabels,
+)
+  .map(([value, label]) => `<option value="${value}">${label}</option>`)
+  .join(
+    "",
+  )}</select><button id="mesh-toggle" aria-pressed="false" class="quiet">△ 网格</button><button id="play" class="primary">▶ 播放扫描</button></div></div>
 <div class="panels"><section class="panel"><div class="panel-head"><div><span class="panel-num">01 / GROUND TRUTH</span><h3>真实电导率</h3></div><span class="unit">S/m</span></div><div class="canvas-wrap"><canvas id="truth" aria-label="真实电导率场，可拖动目标"></canvas><span class="canvas-caption">拖动目标，实时改变介质</span></div><div class="legend"><span id="sigma-min">0</span><div class="gradient sigma"></div><span id="sigma-max">2</span></div><div class="panel-foot"><span id="target-count"></span><span>圆形目标 · 边界内裁切</span></div></section>
 <section class="panel"><div class="panel-head"><div><span class="panel-num">02 / FORWARD MODEL</span><h3>电势与电流场</h3></div><span class="unit">mV</span></div><div class="canvas-wrap"><canvas id="field" aria-label="正向有限元电势与电流方向"></canvas><span class="canvas-caption" id="pair-caption"></span></div><div class="legend"><span id="field-min"></span><div class="gradient diverge"></div><span id="field-max"></span></div><div class="panel-foot"><span>∇ · (σ∇u) = 0</span><span>箭头：电流方向</span></div></section>
-<section class="panel"><div class="panel-head"><div><span class="panel-num">03 / INVERSE MODEL</span><h3>EIT 重建结果</h3></div><span class="unit">S/m</span></div><div class="canvas-wrap"><canvas id="recon" aria-label="差分重建电导率"></canvas><span class="canvas-caption">参考介质 + 重建电导率变化</span></div><div class="legend"><span id="recon-min"></span><div class="gradient sigma"></div><span id="recon-max"></span></div><div class="panel-foot"><span>Jacobian + Tikhonov</span><span id="fit-label"></span></div></section></div>
+<section class="panel"><div class="panel-head"><div><span class="panel-num">03 / INVERSE MODEL</span><h3>EIT 重建结果</h3></div><span class="unit">S/m</span></div><div class="canvas-wrap"><canvas id="recon" aria-label="差分重建电导率"></canvas><span class="canvas-caption">参考介质 + 重建电导率变化</span></div><div class="legend"><span id="recon-min"></span><div class="gradient sigma"></div><span id="recon-max"></span></div><div class="panel-foot"><span id="algorithm-label">Tikhonov · L2</span><span id="fit-label"></span></div></section></div>
 <div class="metrics"><div><span>本次求解</span><strong id="metric-time">—</strong><small id="timing-detail">等待计算</small></div><div><span>有效测量</span><strong id="metric-meas">—</strong><small>排除注流电极相邻测量</small></div><div><span>重建 RMSE</span><strong id="metric-rmse">—</strong><small>与真实电导率的面积加权误差</small></div><div><span>正向相对残差</span><strong id="metric-residual">—</strong><small id="mesh-detail">共轭梯度迭代收敛</small></div></div>
+<div class="inverse-info"><span id="inverse-status" role="status"></span><span id="inverse-detail"></span></div>
 <section class="signals"><div class="signal-head"><div><span class="panel-num">BOUNDARY OBSERVATIONS</span><h3>边界电压响应 <small id="scan-label"></small></h3></div><div class="chart-key"><span><i class="key-ref"></i>均匀参考</span><span><i class="key-meas"></i>当前测量</span><button id="csv" class="quiet">↓ CSV</button></div></div><canvas id="chart" aria-label="当前扫描的参考与测量电压曲线"></canvas><div class="scan-control"><button id="prev" class="quiet" aria-label="上一步">←</button><label for="scan">注流序列</label><input id="scan" type="range" min="0" max="15" value="0" aria-label="注流序列"><span id="scan-count">01 / 16</span><button id="next" class="quiet" aria-label="下一步">→</button></div></section>
-<details class="method"><summary>模型说明与计算边界 <span>了解这个实验如何工作 ↗</span></summary><div><p>二维线性三角形有限元，绝缘外边界、边界节点点电极，中心节点固定电势作为规范。坐标表示半径约 0.1 m 的截面，厚度固定 0.1 m。电极按极角均匀分布（非等弧长），每次注流后采集未接触注流电极的相邻电压差。</p><p>频率使用实部色散模型 σ(f)=σ₀[1+D·f²/(f²+f꜀²)]，各介质共用色散系数；电流为正弦幅值，显示同相电压幅值。不包含复介电率、相位、接触阻抗与仪器电路。目标以三角形重心采样，重叠时列表后面的目标优先。</p><p>围绕均匀参考构建伴随 Jacobian，在 16×16 空间分区中求解差分 Tikhonov 逆问题，正则项为 λ·max diag(JᵀJ)。高对比度下线性化误差会增大，重建数值不作正值截断。噪声为参考电压 RMS 百分比的加性高斯噪声，固定种子保证实验可复现。网格与线性化会造成分辨率限制；这是物理教学与算法探索工具。</p><p>方法参考：<a href="https://sce.carleton.ca/faculty/adler/eidors/doc/eidors/solvers/forward/jacobian_adjoint.html" target="_blank" rel="noreferrer">EIDORS 伴随 Jacobian</a>。实现与 EIDORS 独立。</p></div></details>
+<details class="method"><summary>模型说明与计算边界 <span>了解这个实验如何工作 ↗</span></summary><div><p>二维线性三角形有限元，绝缘外边界、边界节点点电极，中心节点固定电势作为规范。坐标表示半径约 0.1 m 的截面，厚度固定 0.1 m。电极按极角均匀分布（非等弧长），每次注流后采集未接触注流电极的相邻电压差。</p><p>频率使用实部色散模型 σ(f)=σ₀[1+D·f²/(f²+f꜀²)]，各介质共用色散系数；电流为正弦幅值，显示同相电压幅值。不包含复介电率、相位、接触阻抗与仪器电路。目标以三角形重心采样，重叠时列表后面的目标优先。</p><p>围绕均匀参考构建伴随 Jacobian，在 16×16 空间分区中求解差分逆问题。可选 Tikhonov、GREIT 线性训练、各向异性 TV（ADMM）和像素域 L1 稀疏重建（FISTA）。GREIT 使用线性化模拟目标训练，没有神经网络，也没有自动 NF 标定。TV 保留分段边界，L1 偏向稀疏局部变化；相同 λ 在不同算法中含义不同。高对比度下线性化误差会增大，重建数值不作正值截断。噪声为参考电压 RMS 百分比的加性高斯噪声，固定种子保证实验可复现。网格与线性化会造成分辨率限制；这是物理教学与算法探索工具。</p><p>方法参考：<a href="https://sce.carleton.ca/faculty/adler/eidors/doc/eidors/solvers/forward/jacobian_adjoint.html" target="_blank" rel="noreferrer">EIDORS 伴随 Jacobian</a>。实现与 EIDORS 独立。</p></div></details>
 <footer><span>EIT LAB <b> / </b> COMPUTATIONAL IMAGING PLAYGROUND</span><span>在浏览器中，探索看不见的世界。</span></footer></main></div>`;
 function controls() {
   $("#controls").innerHTML =
     `<details open><summary><b>◌</b> 边界与网格 <span>GEOMETRY</span></summary><div class="section-body"><label class="control"><span>边界形状</span><select id="shape"><option value="circle">圆形 / Circle</option><option value="ellipse">椭圆 / Ellipse</option><option value="thorax">胸廓 / Thorax</option><option value="polygon">自定义多边形 / Custom</option></select></label>${config.shape === "ellipse" ? range("aspect", "纵横比", 0.45, 1.4, 0.01, config.aspect) : ""}${config.shape === "polygon" ? `<label class="control"><span>逆时针顶点 · 原点须在内核</span><textarea id="vertices" rows="5" spellcheck="false">${JSON.stringify(config.vertices)}</textarea></label><button id="apply-vertices" class="quiet">应用边界</button><small class="hint">3–32 个 [x,y]，坐标 [-1,1]。支持关于原点的星形多边形。</small>` : ""}<label class="control"><span>电极数量</span><div class="segmented">${[8, 12, 16, 24, 32].map((n) => `<button data-electrodes="${n}" class="${config.electrodes === n ? "active" : ""}">${n}</button>`).join("")}</div></label>${range("rotation", "电极旋转", 0, 359, 1, config.rotation, "°")}${range("rings", "径向网格层数", 4, 14, 1, config.rings)}</div></details>
 <details open><summary><b>ϟ</b> 激励与采集 <span>EXCITATION</span></summary><div class="section-body"><label class="control"><span>扫描方案</span><select id="scheme"><option value="adjacent">相邻激励 / Adjacent</option><option value="opposite">对向激励 / Opposite</option><option value="skip">跨距激励 / Skip</option></select></label>${config.scheme === "skip" ? range("skip", "电极跨距", 2, config.electrodes - 1, 1, Math.min(config.skip, config.electrodes - 1)) : ""}${range("frequency", "激励频率", 1, 1000, 1, config.frequency, " kHz")}${range("current", "电流幅值", 0.1, 10, 0.1, config.current, " mA")}${range("noise", "测量噪声", 0, 5, 0.05, config.noise, " % RMS")}</div></details>
 <details open><summary><b>◍</b> 介质与目标 <span>PHANTOM</span></summary><div class="section-body">${range("background", "背景电导率 σ₀", 0.1, 3, 0.05, config.background, " S/m")}<div class="target-toolbar"><span>内部目标 <small>${config.inclusions.length} / 8</small></span><button id="add-target" class="quiet" ${config.inclusions.length >= 8 ? "disabled" : ""}>＋ 添加</button></div><div class="targets">${config.inclusions.map((i, k) => `<button data-target="${k}" class="${selected === k ? "active" : ""}"><i style="background:${i.sigma >= config.background ? "#e9a249" : "#5caeb5"}"></i>目标 ${k + 1}</button>`).join("")}</div>${config.inclusions[selected] ? `<div class="target-editor">${range("target.sigma", "目标电导率 σ₀", 0.1, 4, 0.05, config.inclusions[selected].sigma, " S/m")}${range("target.radius", "目标半径", 0.06, 0.5, 0.01, config.inclusions[selected].radius)}${range("target.x", "横向位置 x", -0.95, 0.95, 0.01, config.inclusions[selected].x)}${range("target.y", "纵向位置 y", -0.95, 0.95, 0.01, config.inclusions[selected].y)}<button id="remove-target" class="text-button">移除这个目标</button></div>` : '<p class="hint">均匀介质；添加目标以观察重建。</p>'}<details class="sub-details"><summary>频率色散参数</summary>${range("dispersion", "色散强度 D", 0, 2, 0.05, config.dispersion)}${range("corner", "特征频率 f꜀", 1, 500, 1, config.corner, " kHz")}</details></div></details>
-<details open><summary><b>⌁</b> 重建设置 <span>RECONSTRUCTION</span></summary><div class="section-body"><label class="control"><span>正则化 λ<output id="o-lambda">${config.lambda.toExponential(1)}</output></span><input type="range" data-key="lambda" aria-label="正则化" min="-5" max="0" step=".1" value="${Math.log10(config.lambda)}"></label><div class="range-labels"><span>保留细节</span><span>抑制噪声</span></div><p class="hint">与均匀背景比较的差分成像。降低正则化可保留细节，也会放大噪声。</p><label class="control"><span>噪声随机种子</span><input id="seed" type="number" min="0" max="4294967295" value="${config.seed}"></label></div></details>`;
+<details open><summary><b>⌁</b> 重建设置 <span>RECONSTRUCTION</span></summary><div class="section-body"><label class="control"><span>重建算法</span><select id="algorithm" aria-label="重建算法">${Object.entries(
+      algorithmLabels,
+    )
+      .map(([value, label]) => `<option value="${value}">${label}</option>`)
+      .join(
+        "",
+      )}</select></label><p class="hint algorithm-hint">${algorithmDescriptions[config.algorithm]}</p><label class="control"><span>正则化 λ<output id="o-lambda">${config.lambda.toExponential(1)}</output></span><input type="range" data-key="lambda" aria-label="正则化" min="-5" max="0" step=".1" value="${Math.log10(config.lambda)}"></label><div class="range-labels"><span>保留细节</span><span>抑制噪声</span></div>${config.algorithm === "greit" ? range("greitRadius", "训练目标半径", 0.06, 0.3, 0.01, config.greitRadius) + range("greitWidth", "期望图像宽度", 0.06, 0.4, 0.01, config.greitWidth) + '<p class="hint">半径与宽度使用归一化坐标；宽度为高斯标准差。改变这两项会重新训练算子。</p>' : ""}${["tv", "sparse"].includes(config.algorithm) ? range("iterations", "最大迭代次数", 20, 1000, 10, config.iterations) + `<label class="control"><span>收敛容差<output id="o-tolerance">${config.tolerance.toExponential(1)}</output></span><input type="range" data-key="tolerance" aria-label="收敛容差" min="-5" max="-2" step=".25" value="${Math.log10(config.tolerance)}"></label>` : ""}${config.algorithm === "tv" ? range("tvRho", "ADMM 罚参数 ρ", 0.001, 1, 0.001, config.tvRho) + '<p class="hint">ρ 调整迭代速度，不改变 TV 目标函数。达到上限而未收敛时，可提高迭代次数。</p>' : ""}<label class="control"><span>噪声随机种子</span><input id="seed" type="number" min="0" max="4294967295" value="${config.seed}"></label></div></details>`;
+  $<HTMLSelectElement>("#algorithm").value = config.algorithm;
+  $<HTMLSelectElement>("#quick-algorithm").value = config.algorithm;
+  $("#algorithm").onchange = () => {
+    config.algorithm = $<HTMLSelectElement>("#algorithm").value as Algorithm;
+    controls();
+    schedule();
+  };
   $("#shape").addEventListener("change", (e) => {
     config.shape = (e.target as HTMLSelectElement).value as Config["shape"];
     controls();
@@ -63,17 +94,18 @@ function controls() {
     .forEach((input) =>
       input.addEventListener("input", () => {
         const key = input.dataset.key!,
-          value =
-            key === "lambda" ? 10 ** Number(input.value) : Number(input.value);
+          value = ["lambda", "tolerance"].includes(key)
+            ? 10 ** Number(input.value)
+            : Number(input.value);
         if (key.startsWith("target."))
           (config.inclusions[selected] as unknown as Record<string, number>)[
             key.split(".")[1]
           ] = value;
         else (config as unknown as Record<string, number>)[key] = value;
         $(`#o-${CSS.escape(key)}`).textContent =
-          (key === "lambda"
+          (["lambda", "tolerance"].includes(key)
             ? value.toExponential(1)
-            : String(Number(value.toFixed(2)))) + (input.dataset.unit || "");
+            : String(Number(value.toFixed(3)))) + (input.dataset.unit || "");
         schedule();
       }),
     );
@@ -136,6 +168,12 @@ function controls() {
     } else error("随机种子须为 0–4294967295 之间的整数");
   };
 }
+$("#quick-algorithm").onchange = () => {
+  config.algorithm = $<HTMLSelectElement>("#quick-algorithm")
+    .value as Algorithm;
+  controls();
+  schedule();
+};
 function error(message: string) {
   $("#error").hidden = false;
   $("#error").textContent = message;
@@ -203,6 +241,14 @@ function update() {
     `${r.mesh.points.length} 节点 · ${r.mesh.triangles.length} 单元`;
   $("#target-count").textContent =
     `${shown.inclusions.length} 个目标 / σ背景 ${r.baseSigma.toFixed(2)} S/m`;
+  $("#algorithm-label").textContent = algorithmLabels[shown.algorithm];
+  $("#inverse-status").textContent =
+    `${algorithmLabels[shown.algorithm]} · ${r.inverseIterations} 次${["tv", "sparse"].includes(shown.algorithm) ? "迭代" : "求解"} · ${r.inverse.converged ? "已收敛" : "达到迭代上限，未收敛"}`;
+  $("#inverse-status").classList.toggle("not-converged", !r.inverse.converged);
+  $("#inverse-detail").textContent =
+    shown.algorithm === "greit"
+      ? `${r.inverse.trainingTargets} 个线性训练目标 · ${r.inverse.operatorCached ? "算子缓存命中" : "本次构建算子"}`
+      : `${shown.algorithm === "tv" ? "ADMM 残差/阈值" : "最优性相对残差"} ${r.inverse.optimality.toExponential(2)}`;
   $("#fit-label").textContent = `电压拟合误差 ${(r.fit * 100).toFixed(1)}%`;
   $<HTMLInputElement>("#scan").max = String(r.pairs.length - 1);
   draw();
@@ -467,7 +513,7 @@ function download(name: string, data: string, type: string) {
 $("#export").onclick = () =>
   download(
     "eit-experiment.json",
-    JSON.stringify({ version: 1, config }, null, 2),
+    JSON.stringify({ version: 2, config }, null, 2),
     "application/json",
   );
 $("#import").onclick = () => $<HTMLInputElement>("#file").click();
@@ -478,9 +524,7 @@ $("#file").onchange = async () => {
     if (!f) return;
     if (f.size > 100000) throw new Error("文件过大");
     const data = JSON.parse(await f.text());
-    if (data.version !== 1) throw new Error("不支持的实验版本");
-    validate(data.config);
-    config = data.config;
+    config = importExperiment(data);
     selected = 0;
     step = 0;
     controls();

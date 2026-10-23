@@ -990,3 +990,43 @@ footer span:last-child {
     font-size: 14px;
   }
 }
+.algorithm-hint {
+  margin: -5px 0 20px;
+}
+.inverse-info {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -7px 0 20px;
+  font-size: 10px;
+  color: #718362;
+  line-height: 1.7;
+}
+.inverse-info .not-converged {
+  color: #a66b31;
+}
+#inverse-detail {
+  font-family: ui-monospace, monospace;
+  color: #8b987f;
+}
+#quick-algorithm {
+  width: 190px;
+  padding: 7px 8px;
+}
+@media (max-width: 1180px) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+  .toolbar > div:last-child {
+    margin-left: auto;
+  }
+}
+@media (max-width: 600px) {
+  #quick-algorithm {
+    width: 165px;
+  }
+  .toolbar > div:last-child {
+    gap: 3px;
+  }
+}

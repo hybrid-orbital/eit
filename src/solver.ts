@@ -1,3 +1,8 @@
+import {
+  reconstruct,
+  reconstructionDefaults,
+  type ReconstructionOptions,
+} from "./reconstruction";
 export type Point = [number, number];
 export interface Inclusion {
   x: number;
@@ -5,7 +10,7 @@ export interface Inclusion {
   radius: number;
   sigma: number;
 }
-export interface Config {
+export interface Config extends ReconstructionOptions {
   shape: "circle" | "ellipse" | "thorax" | "polygon";
   aspect: number;
   vertices: Point[];
@@ -20,11 +25,11 @@ export interface Config {
   dispersion: number;
   corner: number;
   noise: number;
-  lambda: number;
   inclusions: Inclusion[];
   seed: number;
 }
 export const defaults: Config = {
+  ...reconstructionDefaults,
   shape: "circle",
   aspect: 0.76,
   vertices: [
@@ -70,6 +75,9 @@ export interface Mesh {
   binCenters: Point[];
 }
 export function validate(c: Config) {
+  if (!c || !["tikhonov", "greit", "tv", "sparse"].includes(c.algorithm))
+    throw new Error("未知重建算法");
+  if (!Number.isInteger(c.iterations)) throw new Error("迭代次数必须为整数");
   const ranges: [keyof Config, number, number][] = [
     ["electrodes", 8, 32],
     ["rings", 4, 14],
@@ -83,6 +91,11 @@ export function validate(c: Config) {
     ["corner", 1, 500],
     ["noise", 0, 5],
     ["lambda", 0.00001, 1],
+    ["iterations", 20, 1000],
+    ["tolerance", 0.00001, 0.01],
+    ["tvRho", 0.001, 1],
+    ["greitRadius", 0.06, 0.3],
+    ["greitWidth", 0.06, 0.4],
     ["seed", 0, 4294967295],
   ];
   for (const [key, min, max] of ranges)
@@ -433,59 +446,6 @@ function prepare(c: Config): Cache {
   };
   return cache;
 }
-function reconstruct(
-  J: Float64Array,
-  y: Float64Array,
-  p: number,
-  lambda: number,
-) {
-  const m = y.length,
-    diag = new Float64Array(p),
-    b = new Float64Array(p),
-    tmp = new Float64Array(m);
-  for (let i = 0; i < m; i++)
-    for (let j = 0; j < p; j++) {
-      const v = J[i * p + j];
-      diag[j] += v * v;
-      b[j] += v * y[i];
-    }
-  const ridge = lambda * Math.max(...diag),
-    x = new Float64Array(p),
-    r = b.slice(),
-    z = new Float64Array(p),
-    d = new Float64Array(p),
-    ad = new Float64Array(p);
-  for (let j = 0; j < p; j++) d[j] = z[j] = r[j] / (diag[j] + ridge);
-  let rz = dot(r, z),
-    iter = 0;
-  const norm = dot(b, b);
-  for (; iter < 120 && dot(r, r) > norm * 1e-10 && norm > 1e-30; iter++) {
-    for (let i = 0; i < m; i++) {
-      let s = 0;
-      for (let j = 0; j < p; j++) s += J[i * p + j] * d[j];
-      tmp[i] = s;
-    }
-    for (let j = 0; j < p; j++) ad[j] = ridge * d[j];
-    for (let i = 0; i < m; i++)
-      for (let j = 0; j < p; j++) ad[j] += J[i * p + j] * tmp[i];
-    const alpha = rz / dot(d, ad);
-    for (let j = 0; j < p; j++) {
-      x[j] += alpha * d[j];
-      r[j] -= alpha * ad[j];
-      z[j] = r[j] / (diag[j] + ridge);
-    }
-    const next = dot(r, z);
-    for (let j = 0; j < p; j++) d[j] = z[j] + (next / rz) * d[j];
-    rz = next;
-  }
-  let err = 0;
-  for (let i = 0; i < m; i++) {
-    let s = 0;
-    for (let j = 0; j < p; j++) s += J[i * p + j] * x[j];
-    err += (s - y[i]) ** 2;
-  }
-  return { x, fit: Math.sqrt(err / (dot(y, y) || 1)), iterations: iter };
-}
 export function simulate(c: Config) {
   validate(c);
   const start = performance.now(),
@@ -521,7 +481,20 @@ export function simulate(c: Config) {
   );
   const delta = Float64Array.from(measured, (v, i) => v - baseline[i]),
     forward = performance.now(),
-    inv = reconstruct(J, delta, mesh.bins, c.lambda),
+    inv = reconstruct(
+      J,
+      delta,
+      {
+        centers: mesh.binCenters,
+        areas: Float64Array.from({ length: mesh.bins }, (_, bin) =>
+          mesh.triangles.reduce(
+            (sum, t) => sum + (t.bin === bin ? t.area : 0),
+            0,
+          ),
+        ),
+      },
+      c,
+    ),
     end = performance.now();
   const reconstructed = Float64Array.from(
     mesh.triangles,
@@ -554,7 +527,28 @@ export function simulate(c: Config) {
     fit: inv.fit,
     residual: Math.max(...solutions.map((s) => s.residual)),
     inverseIterations: inv.iterations,
+    inverse: {
+      algorithm: c.algorithm,
+      converged: inv.converged,
+      optimality: inv.optimality,
+      operatorCached: inv.operatorCached,
+      trainingTargets: inv.trainingTargets,
+    },
     baseSigma: ref.baseSigma,
   };
 }
 export type Result = ReturnType<typeof simulate>;
+
+export function importExperiment(data: {
+  version: number;
+  config: Config;
+}): Config {
+  if (!data || ![1, 2].includes(data.version) || !data.config)
+    throw new Error("不支持的实验版本");
+  const config =
+    data.version === 1
+      ? { ...reconstructionDefaults, ...data.config }
+      : data.config;
+  validate(config);
+  return config;
+}

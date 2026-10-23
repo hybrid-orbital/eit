@@ -68,3 +68,74 @@ test("simulation controls, import/export, drag, playback and responsive layout",
   ).toBe(true);
   expect(errors).toEqual([]);
 });
+
+test("classical reconstruction switching, tuning, cache and versioned experiments", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.goto("/");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  const truth = await page
+    .locator("#truth")
+    .evaluate((c: HTMLCanvasElement) => c.toDataURL());
+  const images = new Set<string>();
+  for (const algorithm of ["tikhonov", "greit", "tv", "sparse"]) {
+    await page.locator("#quick-algorithm").selectOption(algorithm);
+    await expect(page.locator("#status")).toHaveText("仿真已同步");
+    await expect(page.locator("#algorithm")).toHaveValue(algorithm);
+    await expect(page.locator("#error")).toBeHidden();
+    expect(
+      await page.locator("#truth").evaluate((c: HTMLCanvasElement) => c.width),
+    ).toBeGreaterThan(0);
+    images.add(
+      await page
+        .locator("#recon")
+        .evaluate((c: HTMLCanvasElement) => c.toDataURL()),
+    );
+  }
+  expect(images.size).toBe(4);
+  await page.locator("#algorithm").selectOption("greit");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await page.locator('[data-key="greitWidth"]').fill("0.2");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await expect(page.locator("#inverse-detail")).toContainText("本次构建算子");
+  await page.locator('[data-key="target.x"]').fill("0.1");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await expect(page.locator("#inverse-detail")).toContainText("算子缓存命中");
+  await page.locator("#algorithm").selectOption("tv");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await page.locator('[data-key="tvRho"]').fill("0.1");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  const download = page.waitForEvent("download");
+  await page.locator("#export").click();
+  const path = await (await download).path();
+  await page.locator("#reset").click();
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await page.locator("#file").setInputFiles(path!);
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await expect(page.locator("#quick-algorithm")).toHaveValue("tv");
+  await expect(page.locator('[data-key="tvRho"]')).toHaveValue("0.1");
+  await page.locator("#algorithm").selectOption("sparse");
+  await page.locator('[data-key="iterations"]').fill("20");
+  await page.locator('[data-key="tolerance"]').fill("-5");
+  await page.locator('[data-key="lambda"]').fill("-5");
+  await expect(page.locator("#status")).toHaveText("仿真已同步");
+  await expect(page.locator("#inverse-status")).toContainText("未收敛");
+  await page.screenshot({
+    path: "test-results/algorithms-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "test-results/algorithms-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  expect(errors).toEqual([]);
+  expect(truth.length).toBeGreaterThan(100);
+});
